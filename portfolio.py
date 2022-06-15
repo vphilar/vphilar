@@ -1,8 +1,11 @@
+import tkinter as tk
 import pandas as pd
 import yfinance as yf
 pd.set_option('max_columns', None)
 pd.set_option("max_rows", None)
 
+
+root = tk.Tk()
 
 tradesDf = pd.read_excel('/Users/vikramphilar/Desktop/trades.xlsx')
 print ('Trades List:')
@@ -30,8 +33,8 @@ for idx, tkr in tradesDf.iterrows():
         annualDividend = ticker.info['trailingAnnualDividendRate']
     elif ticker.info['quoteType'] == 'MUTUALFUND':
         sector = 'MUTUALFUND'
-        divYieldPct = ticker.info['trailingAnnualDividendYield']
-        annualDividend = ticker.info['trailingAnnualDividendRate']
+        divYieldPct = 0
+        annualDividend = 0
         
     
     costBasis = noOfShares * avgPx
@@ -39,7 +42,7 @@ for idx, tkr in tradesDf.iterrows():
     profitOrLoss = mktVal - costBasis
     profitOrLossPct = profitOrLoss/costBasis
     annualDividendIncome = noOfShares * annualDividend
-    previousClosePx = ticker.info['previousClose']
+    previousClosePx = ticker.info['regularMarketPreviousClose']
     movers = ((lastPx-previousClosePx)/previousClosePx)*100
 
     print ('Symbol:', symbol)
@@ -59,3 +62,5 @@ for idx, tkr in tradesDf.iterrows():
     portfolioDf = pd.DataFrame(portfolioList,columns=['Symbol','Shares','Avg Px', 'Type','Currency','Last Price','Company Name','Sector','Cost Basis(USD)','Mkt Val(USD)','P/L(USD)','P/L%','Dividend Yield','Annual Dividend','Annual Dividend Income','Movers'])
 
 print (portfolioDf)
+
+root.mainloop()
