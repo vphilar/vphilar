@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import messagebox
+import boto
 import customtkinter 
 import pandas as pd
 from sqlalchemy import null
@@ -10,11 +11,13 @@ import boto3
 from decimal import Decimal
 import uuid
 import numpy as np
+import tkcalendar as tkc
+from boto3.dynamodb.conditions import Key, Attr
 
 
 class App(customtkinter.CTk):
 
-    WIDTH = 2000
+    WIDTH = 1200
     HEIGHT = 700
 
 
@@ -57,6 +60,13 @@ class App(customtkinter.CTk):
                                                 command=self.CurrentHoldings)
         self.button_1.grid(row=4, column=0, pady=10, padx=20)
 
+        self.label_mode = customtkinter.CTkLabel(master=self.frame_left, text="Appearance Mode:")
+        self.label_mode.grid(row=9, column=0, pady=0, padx=20, sticky="w")
+
+        self.optionmenu_1 = customtkinter.CTkOptionMenu(master=self.frame_left,
+                                                        values=["Light", "Dark", "System"],
+                                                        command=self.change_appearance_mode)
+        self.optionmenu_1.grid(row=10, column=0, pady=10, padx=20, sticky="w")
 
     def AddNewTrade(self):
         print("Adding a new trade")
@@ -64,75 +74,78 @@ class App(customtkinter.CTk):
         for widget in self.frame_right.winfo_children():
             widget.destroy()
 
-        self.side = customtkinter.CTkEntry(master=self.frame_right,
-                                            width=50,
-                                            placeholder_text="Side")
-        self.side.grid(row=1, column=1, columnspan=2, pady=20, padx=20, sticky="we")
+        #self.side = customtkinter.CTkEntry(master=self.frame_right,
+        #                                    width=50,
+        #                                    placeholder_text="Side")
+        #self.side.grid(row=1, column=1, columnspan=2, pady=20, padx=20, sticky="we")
+
+        self.sideComboBox = customtkinter.CTkComboBox(master=self.frame_right,
+                                                    values=["Buy", "Sell"])
+        self.sideComboBox.grid(row=1, column=1, columnspan=1, pady=10, padx=20, sticky="we")
 
         self.ticker = customtkinter.CTkEntry(master=self.frame_right,
                                             width=100,
                                             placeholder_text="Ticker")
         self.ticker.grid(row=1, column=3, columnspan=2, pady=20, padx=20, sticky="we")
 
-        self.date = customtkinter.CTkEntry(master=self.frame_right,
-                                            width=80,
+        self.cal = tkc.DateEntry(master=self.frame_right,
+                                            width=12,
+                                            borderwidth=2,
+                                            foreground="black",
                                             placeholder_text="Date")
-        self.date.grid(row=1, column=5, columnspan=2, pady=20, padx=20, sticky="we")
-
-        self.type = customtkinter.CTkEntry(master=self.frame_right,
-                                            width=60,
-                                            placeholder_text="Type")
-        self.type.grid(row=1, column=7, columnspan=2, pady=20, padx=20, sticky="we")
+        self.cal.grid(row=1, column=5, columnspan=2, pady=20, padx=20, sticky="we")
 
         self.shares = customtkinter.CTkEntry(master=self.frame_right,
                                             width=100,
                                             placeholder_text="Shares")
-        self.shares.grid(row=1, column=9, columnspan=2, pady=20, padx=20, sticky="we")
+        self.shares.grid(row=1, column=7, columnspan=2, pady=20, padx=20, sticky="we")
 
         self.avgPx = customtkinter.CTkEntry(master=self.frame_right,
                                             width=100,
                                             placeholder_text="Avg Price")
-        self.avgPx.grid(row=1, column=11, columnspan=2, pady=20, padx=20, sticky="we")
-
+        self.avgPx.grid(row=1, column=9, columnspan=2, pady=20, padx=20, sticky="we")
 
         self.AddButton = customtkinter.CTkButton(master=self.frame_right,
                                                 text="Add Trade",
                                                 command=self.AddTradeToDB)
-        self.AddButton.grid(row=3, column=5, pady=10, padx=20)
+        self.AddButton.grid(row=1, column=11, pady=10, padx=20)
 
 
     def AddTradeToDB(self):
         print("Saving the following trade to DynamoDB:")
-        print ('Side:', self.side.get())
-        print ('Ticker:', self.ticker.get())
-        print ('Date:', self.date.get())
-        print ('Type:', self.type.get())
+        print ('Side:', self.sideComboBox.get())
+        inputTkr = self.ticker.get()
+        print ('Ticker:', inputTkr)
+        print ('Date:', self.cal.get())
         print ('Shares:', self.shares.get())
         print ('Avg Price:', self.avgPx.get())
 
-        tradesRes = boto3.resource('dynamodb')
-        tradesTable = tradesRes.Table('TRADES')
+        tkr = yf.Ticker(inputTkr)
+        ivType = tkr.info['quoteType']
 
-        print ('Table size:', tradesTable.item_count)
+        dynRes = boto3.resource('dynamodb')
+        tradesTable = dynRes.Table('TRADES')
+        #print ('TRADES table size:', tradesTable.item_count)
+
         tradesTable.put_item(
-        Item={
-                'TradeID': str(uuid.uuid1()),
-                'Side': self.side.get(),
-                'Ticker': self.ticker.get(),
-                'Date': self.date.get(),
-                'Type': self.type.get(),
-                'Shares': Decimal(self.shares.get()),
-                'Avg Px': Decimal(self.avgPx.get())
-            }
+            Item={
+                    'TradeID' : str(uuid.uuid1()),
+                    'Side' :  self.sideComboBox.get(),
+                    'Ticker' : inputTkr,
+                    'Date' : self.cal.get(),
+                    'Type' : ivType,
+                    'Shares' : self.shares.get(),
+                    'Avg Px' : self.avgPx.get()
+                }
         )
-        messagebox.showinfo('Success!', 'Item successfully inserted!')
+        messagebox.showinfo('Success!', 'Trade inserted in TRADES table!\n\nCurrent holdings is being updated...')
         print ('Item inserted in TRADES table!')
 
         response = tradesTable.scan()
         tradesDict = response['Items']
     
         while 'LastEvaluatedKey' in response:
-            response = tradesTable.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
+            response = dynRes.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
             tradesDict.extend(response['Items'])
 
         print ('All trades:')
@@ -181,22 +194,76 @@ class App(customtkinter.CTk):
         print ('finalTradesDf:')
         print (finalTradesDf)
 
-        tradesDict = finalTradesDf.to_dict()
-        print ('tradesDict:')
-        print (tradesDict)
+        print ('Ticker input was', inputTkr)
 
+        holdingsClient = boto3.client('dynamodb')
+
+        try:
+
+            holdingsTable = holdingsClient.describe_table(TableName='HOLDINGS')
+
+        except holdingsClient.exceptions.ResourceNotFoundException:
+            # do something here as you require
+
+            print ('HOLDINGS table doesnt exist, so creating it...')
+
+            # Create the DynamoDB table.
+            holdingsTable = holdingsClient.create_table(
+                TableName='HOLDINGS',
+                BillingMode='PROVISIONED',
+                KeySchema=[
+                    {
+                        'AttributeName': 'PositionID',
+                        'KeyType': 'HASH'
+                    }
+                ],
+                AttributeDefinitions=[
+                    {
+                        'AttributeName': 'PositionID',
+                        'AttributeType': 'S'
+                    }
+                ],
+                ProvisionedThroughput={
+                    'ReadCapacityUnits': 5,
+                    'WriteCapacityUnits': 5
+                }
+            )
+
+            #holdingsTable = holdingsRes.Table('HOLDINGS')
+            
         portfolioList = []
 
         for idx in range(0, finalTradesDf.shape[0]):
-            ticker = yf.Ticker(finalTradesDf.iloc[idx, 'Ticker'])
-            noOfShares = float(finalTradesDf.iloc[idx, 'Shares'])
-            avgPx = float(finalTradesDf.iloc[idx, 'Avg Px'])
+
+            tkr = finalTradesDf.loc[idx, 'Ticker']
+            print ('Type of tkr is ', type(tkr))
+            resp = holdingsClient.scan(
+                TableName='HOLDINGS',
+                ExpressionAttributeValues={
+                    ':tkr': {
+                        'S': finalTradesDf.loc[idx, 'Ticker'],
+                    },
+                },
+                FilterExpression = 'Ticker = :tkr'
+            )
+
+            print ('resp:', resp)
+            
+            item = resp['Items']
+            if len(item) > 0:
+                print ('item exists in HOLDINGS table, please update the row for: ', item)
+            else:
+                print ('New item, please add to HOLDINGS table')
+
+            print ('In here')
+            ticker = yf.Ticker(tkr)
+            noOfShares = float(finalTradesDf.loc[idx, 'Shares'])
+            avgPx = float(finalTradesDf.loc[idx, 'Avg Px'])
             curr = ticker.info['currency']
             symbol = ticker.info['symbol']
             ivType = ticker.info['quoteType']
             lastPx = ticker.info['regularMarketPrice']
             compName = ticker.info['shortName']
-            print ('compName:', compName)
 
             if ticker.info['quoteType'] == 'EQUITY':
                 sect = ticker.info['sector']
@@ -228,19 +295,20 @@ class App(customtkinter.CTk):
             mktVal = noOfShares * lastPx
             profitOrLoss = mktVal - costBasis
             profitOrLossPct = profitOrLoss/costBasis
-            print ('annualDividend:', annualDividend)
-            print ('noOfShares:', noOfShares)
             annualDividendIncome = noOfShares * annualDividend
             previousClosePx = ticker.info['regularMarketPreviousClose']
             movers = ((lastPx-previousClosePx)/previousClosePx)*100
 
             print ('Symbol:', symbol)
+            print ('Shares:', noOfShares)
+            print ('Avg Price:', avgPx)
             print ('Last Price:', lastPx)
             print ('Currency:', curr)
-            print ('Type:', type)
+            print ('Type:', ivType)
             print ('Company Name:', compName)
             print ('Sector:', sect)
-            print ('Cost Basis:', costBasis)
+            print ('Cost Basis(USD):', costBasis)
+            print ('Mkt Val(USD):', mktVal)
             print ('P/L(USD):', profitOrLoss)
             print ('P/L%:', profitOrLossPct)
             print ('Dividend Yield:', divYieldPct)
@@ -248,12 +316,41 @@ class App(customtkinter.CTk):
             print ('Annual Dividend Income:', annualDividendIncome)
             print ('Movers:', movers)
 
+            print ('Inserting ', symbol, ' in HOLDINGS table')
+            resp = holdingsClient.put_item(
+            TableName='HOLDINGS',
+            Item={
+                    'PositionID' : {'S' : str(uuid.uuid1())},
+                    'Symbol' : {'S' : symbol},
+                    'Shares' : {'N' : str(noOfShares)},
+                    'Avg Px' : {'N' : str(avgPx)},
+                    'Last Price' : {'N' : str(lastPx)},
+                    'Currency' : {'S' : curr},
+                    'Type' : {'S' : ivType},
+                    'Company Name' : {'S' : compName},
+                    'Sector' : {'S' : sect},
+                    'Cost Basis(USD)' : {'N' : str(costBasis)},
+                    'Mkt Val(USD)' : {'N' : str(mktVal)},
+                    'P/L(USD)' : {'N' : str(profitOrLoss)},
+                    'P/L%' : {'N' : str(profitOrLossPct)},
+                    'Dividend Yield' : {'N' : str(divYieldPct)},
+                    'Annual Dividend' : {'N' : str(annualDividend)},
+                    'Annual Dividend Income' : {'N' : str(annualDividendIncome)},
+                    'Movers' : {'N' : str(movers)}  
+                }
+            )
+
+            print ('Resp:')
+            print (resp)
+            
             portfolioList.append([symbol,noOfShares,avgPx,ivType,curr,lastPx,compName,sect,costBasis,mktVal,profitOrLoss,profitOrLossPct,divYieldPct,annualDividend,annualDividendIncome,movers])
             portfolioDf = pd.DataFrame(portfolioList,columns=['Symbol','Shares','Avg Px', 'Type','Currency','Last Price','Company Name','Sector','Cost Basis(USD)','Mkt Val(USD)','P/L(USD)','P/L%','Dividend Yield','Annual Dividend','Annual Dividend Income','Movers'])
 
         print (portfolioDf)
-      
-       
+
+        messagebox.showinfo('Success!', 'HOLDINGS updated!')
+        print ('HOLDINGS updated!')
+
     
     def ShowAllTrades(self):
 
@@ -275,23 +372,26 @@ class App(customtkinter.CTk):
         print (tradesDict)
 
         print ('List of all trades:')
-        tradesDf = pd.DataFrame(tradesDict, columns=['TradeID','Side','Ticker','Date','Type','Shares','Avg Px'])
-        print ('Current Trades:')
+        tradesDf = pd.DataFrame(tradesDict, columns=['Side','Ticker','Date','Type','Shares','Avg Px'])
         print (tradesDf)
 
-        colList = ['TradeID','Side','Ticker','Date','Type','Shares','Avg Px']
+        colList = ['Side','Ticker','Date','Type','Shares','Avg Px']
+
+        print ('Total rows:', tradesDf.shape[0])
+        print ('Total columns:', tradesDf.shape[1])
+
+        for j in range(0,tradesDf.shape[1]):
+            self.entry = tk.Entry(self.frame_right, width=20,bg='lightblue',justify='center')
+            self.entry.grid(row=0, column=j)
+            self.entry.insert(tk.END, colList[j])
 
         # An approach for creating the table
-        for i in range(tradesDf.shape[0]):
-            for j in range(tradesDf.shape[1]):
-                print(i)
-       
-                self.entry = tk.Entry(self.frame_right, width=20)
-                self.entry.grid(row=i, column=j)
-                if i==0:
-                    self.entry.insert(tk.END, colList[j])
-                else:  
-                    self.entry.insert(tk.END, tradesDf.values.tolist()[i][j])
+        for i in range(0,tradesDf.shape[0]):
+            for j in range(0,tradesDf.shape[1]):
+    
+                self.entry = tk.Entry(self.frame_right, width=20, justify='center')
+                self.entry.grid(row=i+1, column=j)
+                self.entry.insert(tk.END, tradesDf.loc[i, tradesDf.columns[j]])
 
 
     def CurrentHoldings(self):
@@ -313,37 +413,23 @@ class App(customtkinter.CTk):
         print (holdingsDict)
 
         print ('Current Holdings:')
-        holdingsDf = pd.DataFrame(holdingsDict, columns=['Symbol','Shares','Avg Px', 'Type','Currency','Last Price','Company Name','Sector','Cost Basis(USD)','Mkt Val(USD)','P/L(USD)','P/L%','Dividend Yield','Annual Dividend','Annual Dividend Income','Movers'])
+        holdingsDf = pd.DataFrame(holdingsDict, columns=['Symbol','Shares','Avg Px','Type','Currency','Last Price','Company Name','Sector','Cost Basis(USD)','Mkt Val(USD)','P/L(USD)','P/L%','Dividend Yield','Annual Dividend','Annual Dividend Income','Movers'])
         print (holdingsDf)
         
+        colList = ['Symbol','Shares','Avg Px','Type','Currency','Last Price','Company Name','Sector','Cost Basis(USD)','Mkt Val(USD)','P/L(USD)','P/L%','Dividend Yield','Annual Dividend','Annual Dividend Income','Movers']
 
+        for j in range(0,holdingsDf.shape[1]):
+            self.entry = tk.Entry(self.frame_right, width=10,bg='lightblue',justify='center')
+            self.entry.grid(row=0, column=j)
+            self.entry.insert(tk.END, colList[j])
 
-    
-        # ============ frame_info ============
-
-        #self.frame_info = customtkinter.CTkFrame(master=self.frame_right)
-        #self.frame_info.grid(row=0, column=0, columnspan=4, rowspan=4, pady=20, padx=20, sticky="nsew")
-
-        # configure grid layout (1x1)
-        #self.frame_info.rowconfigure(0, weight=1)
-        #self.frame_info.columnconfigure(0, weight=1)
-
-        portfolioList = []
-        colsList = portfolioDf.columns.tolist()
-        portfolioList.append(colsList)
-        portfolioList.append(portfolioDf.values.tolist())
-
-        print ('portfolioList:', portfolioList)
-
-        for i in range(portfolioDf.shape[0]):
-            for j in range(portfolioDf.shape[1]):
-
-                self.e = customtkinter.CTkEntry(master=self.frame_right,
-                                                width=90,
-                                                fg='blue')
-
-                self.e.grid(row=i, column=j)
-                self.e.insert(tk.END, portfolioList[i][j])
+        # An approach for creating the table
+        for i in range(0, holdingsDf.shape[0]):
+            for j in range(0, holdingsDf.shape[1]):
+       
+                self.entry = tk.Entry(self.frame_right, width=10)
+                self.entry.grid(row=i+1, column=j)
+                self.entry.insert(tk.END, holdingsDf.loc[i, holdingsDf.columns[j]])
 
 
     def button_event(self):
