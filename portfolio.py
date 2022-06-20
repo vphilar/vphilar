@@ -111,6 +111,22 @@ class App(customtkinter.CTk):
         self.AddButton.grid(row=1, column=11, pady=10, padx=20)
 
 
+    def CheckIfTableExists(self, tableName):
+        dynDBRes = boto3.client('dynamodb')
+        tablesDict = dynDBRes.list_tables()
+        print ('tablesDict:', tablesDict['TableNames'])
+        tablesList = tablesDict['TableNames']
+
+        if tableName in tablesList:
+            print (tableName + ' table exists! No need to create one')
+            return (True)
+        else:
+            print (tableName + ' table doesnt exist! Creating a new one...')
+            return (False)
+
+
+
+
     def AddTradeToDB(self):
         print("Saving the following trade to DynamoDB:")
         print ('Side:', self.sideComboBox.get())
@@ -120,39 +136,68 @@ class App(customtkinter.CTk):
         print ('Shares:', self.shares.get())
         print ('Avg Price:', self.avgPx.get())
 
-        tkr = yf.Ticker(inputTkr)
-        ivType = tkr.info['quoteType']
+        tkr = yf.Ticker(inputTkr).info
+        ivType = tkr.get('quoteType')
 
-        dynRes = boto3.resource('dynamodb')
-        tradesTable = dynRes.Table('TRADES')
-        #print ('TRADES table size:', tradesTable.item_count)
+        tableExists = self.CheckIfTableExists('TRADES')
 
+        if tableExists:
+            tradesRes = boto3.resource('dynamodb')
+            tradesTable = tradesRes.Table('TRADES')
+        else:
+            # Create the DynamoDB table.
+            tradesRes = boto3.resource('dynamodb')
+            tradesTable = tradesRes.create_table(
+                TableName='TRADES',
+                BillingMode='PROVISIONED',
+                KeySchema=[
+                    {   
+                        'AttributeName': 'TradeID',
+                        'KeyType': 'HASH'
+                    }
+                ],
+                AttributeDefinitions=[
+                    {
+                        'AttributeName': 'TradeID',
+                        'AttributeType': 'S'
+                    }
+                ],
+                ProvisionedThroughput={
+                    'ReadCapacityUnits': 5,
+                    'WriteCapacityUnits': 5
+                }
+            )
+        
+        tradesTable.wait_until_exists()
+        
         tradesTable.put_item(
+            TableName='TRADES',
             Item={
                     'TradeID' : str(uuid.uuid1()),
                     'Side' :  self.sideComboBox.get(),
                     'Ticker' : inputTkr,
                     'Date' : self.cal.get(),
-                    'Type' : ivType,
+                    'IVType' : ivType,
                     'Shares' : self.shares.get(),
                     'Avg Px' : self.avgPx.get()
                 }
-        )
-        messagebox.showinfo('Success!', 'Trade inserted in TRADES table!\n\nCurrent holdings is being updated...')
+            )
+
+        messagebox.showinfo('Success!', 'Trade inserted in TRADES table!\n\nUpdating holdings table...')
         print ('Item inserted in TRADES table!')
 
-        response = tradesTable.scan()
-        tradesDict = response['Items']
+        resp = tradesTable.scan()
+        tradesDict = resp['Items']
     
-        while 'LastEvaluatedKey' in response:
-            response = dynRes.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
-            tradesDict.extend(response['Items'])
+        while 'LastEvaluatedKey' in resp:
+            resp = tradesRes.scan(ExclusiveStartKey=resp['LastEvaluatedKey'])
+            tradesDict.extend(resp['Items'])
 
         print ('All trades:')
-        tradesDf = pd.DataFrame(tradesDict, columns=['TradeID','Side','Ticker','Date','Type','Shares','Avg Px'])
+        tradesDf = pd.DataFrame(tradesDict, columns=['TradeID','Side','Ticker','Date','IVType','Shares','Avg Px'])
         print (tradesDf)
 
-        uniqueTradesDf = tradesDf[['Side','Ticker','Type','Shares','Avg Px']]
+        uniqueTradesDf = tradesDf[['Side','Ticker','IVType','Shares','Avg Px']]
         uniqueTradesDf['Shares'] = uniqueTradesDf['Shares'].astype('float64')
         uniqueTradesDf['Avg Px'] = uniqueTradesDf['Avg Px'].astype('float64')
 
@@ -196,23 +241,19 @@ class App(customtkinter.CTk):
 
         print ('Ticker input was', inputTkr)
 
-        holdingsClient = boto3.client('dynamodb')
+        tableExists = self.CheckIfTableExists('HOLDINGS')
 
-        try:
-
-            holdingsTable = holdingsClient.describe_table(TableName='HOLDINGS')
-
-        except holdingsClient.exceptions.ResourceNotFoundException:
-            # do something here as you require
-
-            print ('HOLDINGS table doesnt exist, so creating it...')
-
+        if tableExists:
+            holdingsRes = boto3.resource('dynamodb')
+            holdingsTable = holdingsRes.Table('HOLDINGS')
+        else:
             # Create the DynamoDB table.
-            holdingsTable = holdingsClient.create_table(
+            holdingsRes = boto3.resource('dynamodb')
+            holdingsTable = holdingsRes.create_table(
                 TableName='HOLDINGS',
                 BillingMode='PROVISIONED',
                 KeySchema=[
-                    {
+                    {   
                         'AttributeName': 'PositionID',
                         'KeyType': 'HASH'
                     }
@@ -228,65 +269,52 @@ class App(customtkinter.CTk):
                     'WriteCapacityUnits': 5
                 }
             )
-
-            #holdingsTable = holdingsRes.Table('HOLDINGS')
+            holdingsTable.wait_until_exists()
             
+
         portfolioList = []
 
         for idx in range(0, finalTradesDf.shape[0]):
 
-            tkr = finalTradesDf.loc[idx, 'Ticker']
-            print ('Type of tkr is ', type(tkr))
-            resp = holdingsClient.scan(
-                TableName='HOLDINGS',
-                ExpressionAttributeValues={
-                    ':tkr': {
-                        'S': finalTradesDf.loc[idx, 'Ticker'],
-                    },
-                },
-                FilterExpression = 'Ticker = :tkr'
-            )
-
-            print ('resp:', resp)
-            
-            item = resp['Items']
-            if len(item) > 0:
-                print ('item exists in HOLDINGS table, please update the row for: ', item)
-            else:
-                print ('New item, please add to HOLDINGS table')
+            stock = finalTradesDf.loc[idx, 'Ticker']
 
             print ('In here')
-            ticker = yf.Ticker(tkr)
+            ticker = yf.Ticker(stock).info
             noOfShares = float(finalTradesDf.loc[idx, 'Shares'])
             avgPx = float(finalTradesDf.loc[idx, 'Avg Px'])
-            curr = ticker.info['currency']
-            symbol = ticker.info['symbol']
-            ivType = ticker.info['quoteType']
-            lastPx = ticker.info['regularMarketPrice']
-            compName = ticker.info['shortName']
+            curr = ticker.get('currency')
+            symbol = ticker.get('symbol')
+            ivType = ticker.get('quoteType')
+            lastPx = ticker.get('regularMarketPrice')
+            compName = ticker.get('shortName')
 
-            if ticker.info['quoteType'] == 'EQUITY':
-                sect = ticker.info['sector']
-                if ticker.info['dividendYield'] == None:
+            if ticker.get('quoteType') == 'EQUITY':
+
+                if ticker.get('sector'):
+                    sect = ticker.get('sector')
+                else:
+                    sect = None
+
+                if ticker.get('dividendYield') == None:
                     divYieldPct = 0
                 else:
-                    divYieldPct = ticker.info['dividendYield']
-                if ticker.info['dividendRate'] == None:
+                    divYieldPct = ticker.get('dividendYield')
+                if ticker.get('dividendRate') == None:
                     annualDividend = 0
                 else:
-                    annualDividend = ticker.info['dividendRate']
-            elif ticker.info['quoteType'] == 'ETF':
+                    annualDividend = ticker.get('dividendRate')
+            elif ticker.get('quoteType') == 'ETF':
                 sect = 'ETF'
-                if ticker.info['trailingAnnualDividendYield'] == None:
+                if ticker.get('trailingAnnualDividendYield') == None:
                     divYieldPct = 0
                 else:
-                    divYieldPct = ticker.info['trailingAnnualDividendYield']
+                    divYieldPct = ticker.get('trailingAnnualDividendYield')
                 
-                if ticker.info['trailingAnnualDividendRate'] == None:
+                if ticker.get('trailingAnnualDividendRate') == None:
                     annualDividend = 0
                 else:
-                    annualDividend = ticker.info['trailingAnnualDividendRate']
-            elif ticker.info['quoteType'] == 'MUTUALFUND':
+                    annualDividend = ticker.get('trailingAnnualDividendRate')
+            elif ticker.get('quoteType') == 'MUTUALFUND':
                 sect = 'MUTUALFUND'
                 divYieldPct = 0
                 annualDividend = 0
@@ -296,55 +324,97 @@ class App(customtkinter.CTk):
             profitOrLoss = mktVal - costBasis
             profitOrLossPct = profitOrLoss/costBasis
             annualDividendIncome = noOfShares * annualDividend
-            previousClosePx = ticker.info['regularMarketPreviousClose']
+            previousClosePx = ticker.get('regularMarketPreviousClose')
             movers = ((lastPx-previousClosePx)/previousClosePx)*100
 
             print ('Symbol:', symbol)
             print ('Shares:', noOfShares)
-            print ('Avg Price:', avgPx)
+            print ('Avg Px:', avgPx)
             print ('Last Price:', lastPx)
             print ('Currency:', curr)
-            print ('Type:', ivType)
+            print ('IVType:', ivType)
             print ('Company Name:', compName)
             print ('Sector:', sect)
             print ('Cost Basis(USD):', costBasis)
             print ('Mkt Val(USD):', mktVal)
-            print ('P/L(USD):', profitOrLoss)
-            print ('P/L%:', profitOrLossPct)
+            print ('ProfitLossUSD:', profitOrLoss)
+            print ('ProfitLossPct:', profitOrLossPct)
             print ('Dividend Yield:', divYieldPct)
             print ('Annual Dividend:', annualDividend)
             print ('Annual Dividend Income:', annualDividendIncome)
             print ('Movers:', movers)
 
             print ('Inserting ', symbol, ' in HOLDINGS table')
-            resp = holdingsClient.put_item(
-            TableName='HOLDINGS',
-            Item={
-                    'PositionID' : {'S' : str(uuid.uuid1())},
-                    'Symbol' : {'S' : symbol},
-                    'Shares' : {'N' : str(noOfShares)},
-                    'Avg Px' : {'N' : str(avgPx)},
-                    'Last Price' : {'N' : str(lastPx)},
-                    'Currency' : {'S' : curr},
-                    'Type' : {'S' : ivType},
-                    'Company Name' : {'S' : compName},
-                    'Sector' : {'S' : sect},
-                    'Cost Basis(USD)' : {'N' : str(costBasis)},
-                    'Mkt Val(USD)' : {'N' : str(mktVal)},
-                    'P/L(USD)' : {'N' : str(profitOrLoss)},
-                    'P/L%' : {'N' : str(profitOrLossPct)},
-                    'Dividend Yield' : {'N' : str(divYieldPct)},
-                    'Annual Dividend' : {'N' : str(annualDividend)},
-                    'Annual Dividend Income' : {'N' : str(annualDividendIncome)},
-                    'Movers' : {'N' : str(movers)}  
-                }
+            print ('Check if input ticker', stock, 'exists in HOLDINGS table.')
+
+            resp = holdingsTable.scan(
+                FilterExpression = Attr('Symbol').eq(stock)
             )
 
-            print ('Resp:')
-            print (resp)
-            
+            print ('resp:', resp)
+
+            item = resp['Items']
+            if len(item) > 0:
+                print ('Ticker exists in HOLDINGS table, update the row for: ', item)
+                itemResp = item[0]
+                print ('itemResp:', itemResp)
+                print ("itemResp['PositionID']:", itemResp['PositionID'])
+                holdingsTable.update_item(
+                    Key={
+                        'PositionID': itemResp['PositionID']
+                    },
+                    UpdateExpression="SET Symbol=:val1,Shares=:val2,AvgPx=:val3,LastPrice=:val4,Currency=:val5,IVType=:val6,CompanyName=:val7,Sector=:val8,CostBasisUSD=:val9,MktValUSD=:val10,ProfitLossUSD=:val11,ProfitLossPct=:val12,DividendYield=:val13,AnnualDividend=:val14,AnnualDividendIncome=:val15,Movers=:val16",
+                    ExpressionAttributeValues={
+                        ':val1': symbol,
+                        ':val2': Decimal(str(noOfShares)),
+                        ':val3': Decimal(str(avgPx)),
+                        ':val4': Decimal(str(lastPx)),
+                        ':val5': curr,
+                        ':val6': ivType,
+                        ':val7': compName,
+                        ':val8': sect,
+                        ':val9': Decimal(str(costBasis)),
+                        ':val10': Decimal(str(mktVal)),
+                        ':val11': Decimal(str(profitOrLoss)),
+                        ':val12': Decimal(str(profitOrLossPct)),
+                        ':val13': Decimal(str(divYieldPct)),
+                        ':val14': Decimal(str(annualDividend)),
+                        ':val15': Decimal(str(annualDividendIncome)),
+                        ':val16': Decimal(str(movers))
+                    }
+                )
+
+            else:
+                print ('New ticker, so add to HOLDINGS table')
+
+                resp = holdingsTable.put_item(
+                TableName='HOLDINGS',
+                Item={
+                        'PositionID' : str(uuid.uuid1()),
+                        'Symbol' : symbol,
+                        'Shares' : Decimal(str(noOfShares)),
+                        'AvgPx' : Decimal(str(avgPx)),
+                        'LastPrice' : Decimal(str(lastPx)),
+                        'Currency' : curr,
+                        'IVType' : ivType,
+                        'CompanyName' : compName,
+                        'Sector' : sect,
+                        'CostBasisUSD' : Decimal(str(costBasis)),
+                        'MktValUSD' : Decimal(str(mktVal)),
+                        'ProfitLossUSD' : Decimal(str(profitOrLoss)),
+                        'ProfitLossPct' : Decimal(str(profitOrLossPct)),
+                        'DividendYield' : Decimal(str(divYieldPct)),
+                        'AnnualDividend' : Decimal(str(annualDividend)),
+                        'AnnualDividendIncome' : Decimal(str(annualDividendIncome)),
+                        'Movers' : Decimal(str(movers))
+                    }
+                )
+
+                print ('Resp:')
+                print (resp)
+
             portfolioList.append([symbol,noOfShares,avgPx,ivType,curr,lastPx,compName,sect,costBasis,mktVal,profitOrLoss,profitOrLossPct,divYieldPct,annualDividend,annualDividendIncome,movers])
-            portfolioDf = pd.DataFrame(portfolioList,columns=['Symbol','Shares','Avg Px', 'Type','Currency','Last Price','Company Name','Sector','Cost Basis(USD)','Mkt Val(USD)','P/L(USD)','P/L%','Dividend Yield','Annual Dividend','Annual Dividend Income','Movers'])
+            portfolioDf = pd.DataFrame(portfolioList,columns=['Symbol','Shares','AvgPx', 'IVType','Currency','LastPrice','CompanyName','Sector','CostBasisUSD','MktValUSD','ProfitLossUSD','ProfitLossPct','DividendYield','AnnualDividend','AnnualDividendIncome','Movers'])
 
         print (portfolioDf)
 
@@ -372,10 +442,10 @@ class App(customtkinter.CTk):
         print (tradesDict)
 
         print ('List of all trades:')
-        tradesDf = pd.DataFrame(tradesDict, columns=['Side','Ticker','Date','Type','Shares','Avg Px'])
+        tradesDf = pd.DataFrame(tradesDict, columns=['Side','Ticker','Date','IVType','Shares','Avg Px'])
         print (tradesDf)
 
-        colList = ['Side','Ticker','Date','Type','Shares','Avg Px']
+        colList = ['Side','Ticker','Date','IVType','Shares','Avg Px']
 
         print ('Total rows:', tradesDf.shape[0])
         print ('Total columns:', tradesDf.shape[1])
@@ -413,10 +483,10 @@ class App(customtkinter.CTk):
         print (holdingsDict)
 
         print ('Current Holdings:')
-        holdingsDf = pd.DataFrame(holdingsDict, columns=['Symbol','Shares','Avg Px','Type','Currency','Last Price','Company Name','Sector','Cost Basis(USD)','Mkt Val(USD)','P/L(USD)','P/L%','Dividend Yield','Annual Dividend','Annual Dividend Income','Movers'])
+        holdingsDf = pd.DataFrame(holdingsDict, columns=['Symbol','Shares','AvgPx','IVType','Currency','LastPrice','CompanyName','Sector','CostBasisUSD','MktValUSD','ProfitLossUSD','ProfitLossPct','DividendYield','AnnualDividend','AnnualDividendIncome','Movers'])
         print (holdingsDf)
         
-        colList = ['Symbol','Shares','Avg Px','Type','Currency','Last Price','Company Name','Sector','Cost Basis(USD)','Mkt Val(USD)','P/L(USD)','P/L%','Dividend Yield','Annual Dividend','Annual Dividend Income','Movers']
+        colList = ['Symbol','Shares','AvgPx','IVType','Currency','LastPrice','CompanyName','Sector','CostBasisUSD','MktValUSD','ProfitLossUSD','ProfitLossPct','DividendYield','AnnualDividend','AnnualDividendIncome','Movers']
 
         for j in range(0,holdingsDf.shape[1]):
             self.entry = tk.Entry(self.frame_right, width=10,bg='lightblue',justify='center')
@@ -429,6 +499,10 @@ class App(customtkinter.CTk):
        
                 self.entry = tk.Entry(self.frame_right, width=10)
                 self.entry.grid(row=i+1, column=j)
+
+                if holdingsDf.columns[j] is None:
+                    holdingsDf.columns[j] = 'NA'
+
                 self.entry.insert(tk.END, holdingsDf.loc[i, holdingsDf.columns[j]])
 
 
