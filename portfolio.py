@@ -2,7 +2,8 @@ import tkinter as tk
 from tkinter import Scrollbar, messagebox, ttk
 from webbrowser import BackgroundBrowser
 import boto
-import customtkinter 
+import customtkinter
+from matplotlib import ticker 
 import pandas as pd
 from requests import post
 from sqlalchemy import null
@@ -147,7 +148,7 @@ class App(customtkinter.CTk):
 
         print("Saving the following trade to DynamoDB:")
         print ('Side:', self.sideComboBox.get())
-        inputTkr = self.ticker.get()
+        inputTkr = self.tkr.get()
         print ('Ticker:', inputTkr)
         print ('Date:', self.cal.get())
         print ('Shares:', self.shares.get())
@@ -443,6 +444,18 @@ class App(customtkinter.CTk):
             else:
                 print ('Skip this ticker, no processing required - ', inputTkr)
 
+        self.ShowAllTrades()
+
+
+    def callback(self, eventObject):
+        print ('Got in here!')
+        abc = eventObject.widget.get()
+        ctry = self.tickerCntry.get()
+        print ('ctry:', ctry)
+        tkrList = [item for item in list(self.stockListDf[ctry]) if not(pd.isnull(item)) == True]
+        self.tkr.config(value=tkrList)
+
+
 
     
     def ShowAllTrades(self):
@@ -532,38 +545,53 @@ class App(customtkinter.CTk):
         self.sideLabel = customtkinter.CTkLabel(self.frame_right_lower_input, text='Side')
         self.sideLabel.grid(row=2, column=3, sticky="W", padx=10, pady=10)
 
-        self.tkrLabel = customtkinter.CTkLabel(self.frame_right_lower_input, text='Ticker')
+        self.tkrLabel = customtkinter.CTkLabel(self.frame_right_lower_input, text='Country')
         self.tkrLabel.grid(row=2, column=5, sticky="W", padx=10, pady=10)
 
+        self.tkrLabel = customtkinter.CTkLabel(self.frame_right_lower_input, text='Ticker')
+        self.tkrLabel.grid(row=2, column=7, sticky="W", padx=10, pady=10)
+
         self.dateLabel = customtkinter.CTkLabel(self.frame_right_lower_input, text='Date')
-        self.dateLabel.grid(row=2, column=7, sticky="W", padx=10, pady=10)
+        self.dateLabel.grid(row=2, column=9, sticky="W", padx=10, pady=10)
 
         self.sharesLabel = customtkinter.CTkLabel(self.frame_right_lower_input, text='Shares')
-        self.sharesLabel.grid(row=2, column=9, sticky="W", padx=10, pady=10)
+        self.sharesLabel.grid(row=2, column=11, sticky="W", padx=10, pady=10)
 
         self.avgPxLabel = customtkinter.CTkLabel(self.frame_right_lower_input, text='Avg Px')
-        self.avgPxLabel.grid(row=2, column=11, sticky="W", padx=10, pady=10)
+        self.avgPxLabel.grid(row=2, column=13, sticky="W", padx=10, pady=10)
 
         #Entry Box
         self.sideComboBox = customtkinter.CTkComboBox(master=self.frame_right_lower_input,
                                                     values=["Buy", "Sell"])
         self.sideComboBox.grid(row=4, column=3, sticky="W", padx=10, pady=10)
 
-        self.ticker = customtkinter.CTkEntry(self.frame_right_lower_input)
-        self.ticker.grid(row=4, column=5, sticky="W", padx=10, pady=10)
+        self.stockListDf = pd.read_csv('/Users/vikramphilar/Desktop/stocklist.csv')
+        self.stockListDf = self.stockListDf.T
+        cols = self.stockListDf.iloc[0]
+        self.stockListDf = self.stockListDf[1:]
+        self.stockListDf.columns = cols
+        print (self.stockListDf.head(5))
+
+        self.tickerCntry = customtkinter.CTkComboBox(master=self.frame_right_lower_input,
+                                                    values=list(self.stockListDf.columns))
+        self.tickerCntry.grid(row=4, column=5, sticky="W", padx=10, pady=10)
+        
+        self.tkr = ttk.Combobox(master=self.frame_right_lower_input)
+        self.tkr.grid(row=4, column=7, sticky="W", padx=10, pady=10)
+        self.tkr.bind('<Button-1>', self.callback)
 
         self.cal = tkc.DateEntry(master=self.frame_right_lower_input,
                                             width=12,
                                             borderwidth=2,
                                             foreground="black",
                                             placeholder_text="Date")
-        self.cal.grid(row=4, column=7, sticky="W", padx=10, pady=10)
+        self.cal.grid(row=4, column=9, sticky="W", padx=10, pady=10)
 
         self.shares = customtkinter.CTkEntry(self.frame_right_lower_input)
-        self.shares.grid(row=4, column=9, sticky="W", padx=10, pady=10)
+        self.shares.grid(row=4, column=11, sticky="W", padx=10, pady=10)
 
         self.avgPx = customtkinter.CTkEntry(self.frame_right_lower_input)
-        self.avgPx.grid(row=4, column=11, sticky="W", padx=10, pady=10)
+        self.avgPx.grid(row=4, column=13, sticky="W", padx=10, pady=10)
 
         #Buttons
         self.addNewTradeButton = customtkinter.CTkButton(self.frame_right_lower_input, text='Add New Trade', command=self.AddTradeToDB)
@@ -584,6 +612,7 @@ class App(customtkinter.CTk):
         self.removeMultiButton = customtkinter.CTkButton(self.frame_right_lower_input, text='Remove All Selected', command=self.RemoveAllSelected)
         self.removeMultiButton.grid(row=6, column=11, sticky="W", padx=10, pady=10)
 
+        
     #Remove All trades
     def RemoveAllTrades(self):
         print ('Removing all trades')
@@ -1089,6 +1118,8 @@ class App(customtkinter.CTk):
 
         global count
         count = 0 
+
+        yrlyDividendsDf = yrlyDividendsDf.sort_values('Year', ascending=False)
         for _, row in yrlyDividendsDf.iterrows():
 
             if count % 2 == 0:
